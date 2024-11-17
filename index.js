@@ -8,6 +8,11 @@ const port = 4000;
 const jwt = require('jsonwebtoken');
 const secretKey = 'qazplm098123'; // 请使用一个复杂且难以猜测的密钥
 
+const multer = require('multer');
+const path = require('path');
+
+const fs = require('fs');
+
 
 // 使用你的数据库信息配置连接池
 const pool = new Pool({
@@ -122,7 +127,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running at http://localhost:${port}`);
 });
 
@@ -271,5 +276,77 @@ app.get('/anime/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching anime:', error);
     res.status(500).send('Server error.');
+  }
+});
+
+// 配置 multer 存储位置
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/'); // 上传文件存储目录
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname)); // 生成唯一文件名
+  },
+});
+
+const upload = multer({ storage: storage });
+
+// 视频文件上传 API
+app.post('/upload', upload.single('video'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).send('No file uploaded.');
+    }
+    // 成功上传
+    res.status(201).send({ message: 'File uploaded successfully', filename: req.file.filename });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    res.status(500).send('Server error.');
+  }
+});
+
+app.get('/video/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filepath = path.join(__dirname, 'uploads', filename);
+
+  // 检查文件是否存在
+  if (!fs.existsSync(filepath)) {
+    return res.status(404).send('File not found');
+  }
+
+  const stat = fs.statSync(filepath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    // 解析 Range 请求
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    if (start >= fileSize) {
+      res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
+      return;
+    }
+
+    const chunksize = end - start + 1;
+    const file = fs.createReadStream(filepath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
+    };
+
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    // 如果没有 Range 请求，返回整个文件
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+    };
+    res.writeHead(200, head);
+    fs.createReadStream(filepath).pipe(res);
   }
 });
